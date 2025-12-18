@@ -2,5 +2,6 @@ streamlit
 pandas
 numpy
 joblib
-scikit-learn==1.3.2  # 버전 불일치 방지를 위해 특정 버전 명시 추천
+scikit-learn
+imbalanced-learn
 altair
