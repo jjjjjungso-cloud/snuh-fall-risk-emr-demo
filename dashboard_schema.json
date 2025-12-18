@@ -1,0 +1,57 @@
+{
+  "target_col": "낙상",
+  "raw_input_cols": [
+    "성별",
+    "중증도분류",
+    "SBP",
+    "DBP",
+    "RR",
+    "PR",
+    "BT",
+    "내원시 반응",
+    "나이",
+    "albumin",
+    "crp"
+  ],
+  "numeric_cols": [
+    "중증도분류",
+    "SBP",
+    "DBP",
+    "RR",
+    "PR",
+    "BT",
+    "나이",
+    "albumin",
+    "crp"
+  ],
+  "ordinal_cols": [
+    "중증도분류"
+  ],
+  "binary_cols": [
+    "성별"
+  ],
+  "categorical_cols": [
+    "내원시 반응"
+  ],
+  "category_options": {
+    "내원시 반응": [
+      "alert",
+      "nan",
+      "painful response",
+      "unresponsive",
+      "verbal response"
+    ]
+  },
+  "gender_mapping": {
+    "M": 1,
+    "F": 0,
+    "1": 1,
+    "0": 0
+  },
+  "top_k": 0.2,
+  "resampling": {
+    "RUS_strategy": 0.01,
+    "SMOTE_strategy": 0.02
+  },
+  "model": "LogisticRegression(saga)"
+}
