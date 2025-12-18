@@ -4,17 +4,18 @@ import numpy as np
 import joblib
 from datetime import datetime
 
-# 1. 초기 설정
+# 1. 초기 설정 및 모델 로드
 st.set_page_config(page_title="SNUH AI Fall Monitor", layout="wide")
 
-# 모델 로드 (생략 가능, 파일 없을 시 더미 점수 활용)
 @st.cache_resource
 def load_resources():
     try:
+        # 실제 모델 파일이 있는 경우 로드, 없는 경우 None 반환
         model = joblib.load('risk_score_model.joblib')
         ref_scores = np.load('train_score_ref.npz')['train_scores_sorted']
         return model, ref_scores
-    except: return None, None
+    except: 
+        return None, None
 
 model, ref_scores = load_resources()
 
@@ -22,141 +23,130 @@ if 'nursing_log' not in st.session_state:
     st.session_state.nursing_log = []
 
 # --------------------------------------------------------------------------------
-# 2. 환자 케이스 정의 (선생님께서 주신 A/B안)
+# 2. 환자 데이터 설정 (김분당 - 기존 C안 데이터)
 # --------------------------------------------------------------------------------
-CASE_PRESETS = {
-    "A안: 염증/영양 악화 케이스": {
-        "age": 65, "alb": 4.0, "crp": 0.2, "mental": "alert", "sev": 2, "gender": "남성 (M)"
-    },
-    "B안: 반응 저하 + 고령 케이스": {
-        "age": 82, "alb": 4.0, "crp": 0.2, "mental": "alert", "sev": 2, "gender": "여성 (F)"
-    }
+# 나이 45, 알부민 4.5, CRP 0.1, 의식 alert, 중증도 5, 여성
+patient_data = {
+    "name": "김분당",
+    "age": 45,
+    "alb": 4.5,
+    "crp": 0.1,
+    "mental": "alert",
+    "sev": 5,
+    "gender": "여성 (F)"
 }
 
 # --------------------------------------------------------------------------------
-# 3. 사이드바: 11개 입력창
+# 3. 사이드바: 11개 입력창 (김분당 데이터 기본값)
 # --------------------------------------------------------------------------------
 with st.sidebar:
-    st.header("📋 환자 데이터 입력")
-    
-    # 케이스 선택 버튼
-    selected_case = st.radio("시뮬레이션 케이스 선택", list(CASE_PRESETS.keys()))
-    preset = CASE_PRESETS[selected_case]
-    
+    st.header(f"👤 환자: {patient_data['name']}")
+    st.write("실시간 수치를 조정하여 위험도를 확인하세요.")
     st.divider()
     
-    # 프리셋 데이터 바인딩
-    age = st.number_input("나이 (Age)", 0, 120, preset["age"])
-    gender = st.selectbox("성별", ["남성 (M)", "여성 (F)"], index=0 if preset["gender"] == "남성 (M)" else 1)
-    severity = st.selectbox("중증도분류", [1, 2, 3, 4, 5], index=preset["sev"]-1)
+    # 기본값으로 김분당 데이터 세팅
+    age = st.number_input("나이 (Age)", 0, 120, patient_data["age"])
+    gender = st.selectbox("성별", ["남성 (M)", "여성 (F)"], index=1) # 여성 기본
+    severity = st.selectbox("중증도분류", [1, 2, 3, 4, 5], index=4) # 5단계 기본
     
     c1, c2 = st.columns(2)
-    sbp = c1.number_input("SBP", 50, 250, 120)
-    dbp = c2.number_input("DBP", 30, 150, 80)
+    sbp = c1.number_input("SBP (수축기)", 50, 250, 120)
+    dbp = c2.number_input("DBP (이완기)", 30, 150, 80)
     
     c3, c4, c5 = st.columns(3)
-    pr = c3.number_input("PR", 20, 200, 75)
-    rr = c4.number_input("RR", 5, 50, 18)
-    bt = c5.number_input("BT", 30.0, 45.0, 36.5, step=0.1)
+    pr = c3.number_input("PR (맥박)", 20, 200, 75)
+    rr = c4.number_input("RR (호흡)", 5, 50, 18)
+    bt = c5.number_input("BT (체온)", 30.0, 45.0, 36.5, step=0.1)
     
-    mental = st.selectbox("내원시 반응", ["alert", "verbal response", "painful response", "unresponsive"], 
-                          index=["alert", "verbal response", "painful response", "unresponsive"].index(preset["mental"]))
-    
-    alb = st.slider("Albumin", 1.0, 5.0, preset["alb"], step=0.1)
-    crp = st.number_input("CRP", 0.0, 50.0, preset["crp"], step=0.1)
+    mental = st.selectbox("내원시 반응", ["alert", "verbal response", "painful response", "unresponsive"], index=0)
+    alb = st.slider("Albumin (영양)", 1.0, 5.0, patient_data["alb"], step=0.1)
+    crp = st.number_input("CRP (염증)", 0.0, 50.0, patient_data["crp"], step=0.1)
 
 # --------------------------------------------------------------------------------
-# 4. 분석 로직 (위험 요인 및 점수)
+# 4. AI 분석 및 결과 계산
 # --------------------------------------------------------------------------------
-# 위험 요인 감지
-detected_risks = []
-if age >= 75: detected_risks.append("고령(High Age)")
-if alb < 3.5: detected_risks.append("저알부민혈증(Albumin ↓)")
-if crp > 0.5: detected_risks.append("염증 수치 상승(CRP ↑)")
-if sbp < 100: detected_risks.append("저혈압/어지럼증 위험")
-if mental != "alert": detected_risks.append("의식/인지 변화")
+input_df = pd.DataFrame([{
+    '성별': 1 if "남성" in gender else 0, 
+    '중증도분류': severity, 
+    'SBP': sbp, 'DBP': dbp, 'RR': rr, 'PR': pr, 'BT': bt, 
+    '내원시 반응': mental, 
+    '나이': age, 'albumin': alb, 'crp': crp
+}])
 
-# 점수 계산 (모델 기반)
-input_df = pd.DataFrame([{'성별': 1 if "남성" in gender else 0, '중증도분류': severity, 'SBP': sbp, 'DBP': dbp, 'RR': rr, 'PR': pr, 'BT': bt, '내원시 반응': mental, '나이': age, 'albumin': alb, 'crp': crp}])
-
-if model:
+if model is not None and ref_scores is not None:
     prob = model.predict_proba(input_df)[0][1]
     fall_score = int(np.searchsorted(ref_scores, prob) / len(ref_scores) * 100)
 else:
-    # 모델 없을 시 데모용 가중치 (고령일수록, Alb 낮을수록 상승)
-    base = 40
-    if age > 80: base += 35
-    if alb < 3.5: base += 20
-    fall_score = min(base, 99)
+    # 모델 파일이 없을 경우 시뮬레이션을 위한 임시 계산식 (정상일 때 낮은 점수 유지)
+    base_score = 20
+    if age > 70: base_score += 30
+    if alb < 3.0: base_score += 20
+    if severity < 3: base_score += 15
+    fall_score = min(base_score, 100)
 
 # --------------------------------------------------------------------------------
-# 5. 메인 화면
+# 5. 메인 화면 출력
 # --------------------------------------------------------------------------------
-st.title("🏥 AI 낙상 위험 분석 및 간호중재")
+st.title("🏥 SNUH AI 낙상 위험 대시보드")
+st.subheader(f"현재 환자: {patient_data['name']} (Baseline)")
 
-# [결과 섹션]
-st.subheader(f"🔍 {selected_case} 분석")
-c_res, c_risk = st.columns([4, 6])
+col_res, col_info = st.columns([5, 5])
 
-with c_res:
+with col_res:
+    # 결과 시각화
     if fall_score >= 80:
-        st.error(f"## 위험도: 고위험군 ({fall_score}점)")
-        st.write("👉 **상위 20% 이내**의 낙상 위험군입니다.")
+        st.error(f"## 분석 결과: 고위험군 ({fall_score}점)")
+        status_text = "🚩 즉각적인 예방 중재가 필요한 상태입니다."
+    elif fall_score >= 60:
+        st.warning(f"## 분석 결과: 주의군 ({fall_score}점)")
+        status_text = "⚠️ 수치 변화를 주의 깊게 관찰하십시오."
     else:
-        st.warning(f"## 위험도: 일반관리군 ({fall_score}점)")
-        st.write("👉 수치 변화에 따른 지속적인 모니터링이 필요합니다.")
+        st.success(f"## 분석 결과: 저위험군 ({fall_score}점)")
+        status_text = "✅ 현재 매우 안정적인 상태입니다."
+    
+    st.write(status_text)
 
-with c_risk:
-    st.markdown("**감지된 임상 위험 요인:**")
-    if detected_risks:
-        for r in detected_risks:
-            st.markdown(f"- ⚠️ {r}")
-    else:
-        st.write("- 특이 위험 요인 없음 (기본 예방 수칙 준수)")
+with col_info:
+    st.info("💡 **환자 상태 요약**")
+    st.write(f"- **영양/염증:** Albumin {alb} / CRP {crp}")
+    st.write(f"- **활력징후:** BP {sbp}/{dbp} | PR {pr} | BT {bt}℃")
+    st.write(f"- **인적요인:** {age}세 | 중증도 {severity}단계 | {mental}")
 
-
-
-# [중재 섹션]
+# --------------------------------------------------------------------------------
+# 6. 간호 중재 및 기록
+# --------------------------------------------------------------------------------
 st.divider()
-st.subheader("💉 맞춤형 간호 중재 선택")
+st.subheader("📝 간호 중재 선택 및 기록")
 
-# 중재 데이터베이스
-intervention_db = {
-    "기본": ["침대 난간(Side Rail) 고정", "낙상 예방 표지판 부착", "취침 전 배뇨 확인"],
-    "고령(High Age)": ["야간 조명 유지", "미끄럼 방지 양말 착용 확인", "휠체어 이동 시 보조"],
-    "저알부민혈증(Albumin ↓)": ["고단백 식이 교육", "근력 약화에 따른 보행 보조", "침상 옆 호출벨 위치 재확인"],
-    "염증 수치 상승(CRP ↑)": ["활력징후 집중 모니터링", "염증 완화 시까지 거동 제한 교육"],
-    "저혈압/어지럼증 위험": ["기립성 저혈압 예방 교육", "체위 변경 시 단계적 이동"],
-    "의식/인지 변화": ["보호자 상주 강화", "환자 근거리 배치", "지남력 확인"]
-}
+# 위험 요인에 따른 중재 제안
+st.write("해당 환자에게 시행한 중재를 선택하세요:")
+c_int1, c_int2 = st.columns(2)
 
-selected_interventions = []
-cols = st.columns(3)
+with c_int1:
+    i1 = st.checkbox("침대 난간(Side Rail) 고정 확인")
+    i2 = st.checkbox("낙상 예방 표지판 부착")
+with c_int2:
+    i3 = st.checkbox("호출벨 사용법 재교육")
+    i4 = st.checkbox("야간 조명 및 바닥 환경 확인")
 
-# 1. 공통 중재
-with cols[0]:
-    st.write("**[공통 중재]**")
-    for act in intervention_db["기본"]:
-        if st.checkbox(act, key=act): selected_interventions.append(act)
-
-# 2. 감지된 위험 요인별 중재 (동적 생성)
-for i, risk in enumerate(detected_risks):
-    with cols[(i + 1) % 3]:
-        st.write(f"**[{risk} 맞춤 중재]**")
-        for act in intervention_db.get(risk, []):
-            if st.checkbox(act, key=f"{risk}_{act}"): selected_interventions.append(act)
-
-# [간호기록 연동 섹션]
-st.divider()
-if st.button("📝 선택한 중재 간호기록으로 전송", use_container_width=True):
-    if not selected_interventions:
-        st.warning("중재 항목을 선택해주세요.")
+if st.button("간호기록(Nursing Note) 전송", use_container_width=True):
+    selected = []
+    if i1: selected.append("Side Rail 고정")
+    if i2: selected.append("예방 표지판 부착")
+    if i3: selected.append("호출벨 교육")
+    if i4: selected.append("환경 점검")
+    
+    if not selected:
+        st.warning("선택된 중재 항목이 없습니다.")
     else:
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
-        note = f"[{timestamp}] [AI 낙상스크리닝: {fall_score}점] {', '.join(selected_interventions)} 시행함."
-        st.session_state.nursing_log.insert(0, note)
-        st.success("간호기록이 연동되었습니다.")
+        now = datetime.now().strftime('%Y-%m-%d %H:%M')
+        log_entry = f"[{now}] [AI 낙상점수: {fall_score}점] {', '.join(selected)} 시행함."
+        st.session_state.nursing_log.insert(0, log_entry)
+        st.success("기록이 저장되었습니다.")
 
-st.subheader("📄 간호기록 히스토리 (EMR)")
-for log in st.session_state.nursing_log:
-    st.info(log)
+# 기록 히스토리 표시
+if st.session_state.nursing_log:
+    st.write("---")
+    st.write("**최근 간호기록 히스토리**")
+    for log in st.session_state.nursing_log[:5]: # 최근 5개만 표시
+        st.caption(log)
