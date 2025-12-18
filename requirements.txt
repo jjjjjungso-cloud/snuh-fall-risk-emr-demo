@@ -3,5 +3,5 @@ pandas
 numpy
 joblib
 scikit-learn
-imbalanced-learn
+imbalanced-learn  # 👈 이 줄을 반드시 추가하세요!
 altair
